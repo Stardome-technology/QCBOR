@@ -99,7 +99,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 /* Embed a version string in the library */
-const char libqcborVersionDecode[] = QCBOR_VERSION_STRING;
+const char libqcborVersionDecode[] = QCBOR_VERSION_BANNER;
 
 
 static bool
@@ -1525,7 +1525,7 @@ Done:
  *
  * @param[in] pMe                The decode context.
  * @param[in] uUnMappedTag       The tag number to map
- * @param[out] puMappedTagNumer  The stored tag number.
+ * @param[out] puMappedTagNumber  The stored tag number.
  *
  * @return error code.
  *
@@ -1536,13 +1536,18 @@ Done:
  * This maps tag numbers greater than QCBOR_LAST_UNMAPPED_TAG.
  * QCBOR_LAST_UNMAPPED_TAG is a little smaller than MAX_UINT16.
  *
+ * *puMappedTagNumber is set to CBOR_TAG_INVALID16 on error and never
+ * on success; callers rely on this behavior.
+ *
  * See also UnMapTagNumber() and @ref QCBORItem.
  */
 static QCBORError
 QCBORDecode_Private_MapTagNumber(QCBORDecodeContext *pMe,
                                  const uint64_t      uUnMappedTag,
-                                 uint16_t           *puMappedTagNumer)
+                                 uint16_t           *puMappedTagNumber)
 {
+   *puMappedTagNumber = CBOR_TAG_INVALID16;
+
    if(uUnMappedTag > QCBOR_LAST_UNMAPPED_TAG) {
       unsigned uTagMapIndex;
       /* Is there room in the tag map, or is it in it already? */
@@ -1558,12 +1563,12 @@ QCBORDecode_Private_MapTagNumber(QCBORDecodeContext *pMe,
          return QCBOR_ERR_TOO_MANY_TAGS;
       }
 
-      /* Covers the cases where tag is new and were it is already in the map */
+      /* Covers the cases where tag is new and where it is already in the map */
       pMe->auMappedTags[uTagMapIndex] = uUnMappedTag;
-      *puMappedTagNumer = (uint16_t)(uTagMapIndex + QCBOR_LAST_UNMAPPED_TAG + 1);
+      *puMappedTagNumber = (uint16_t)(uTagMapIndex + QCBOR_LAST_UNMAPPED_TAG + 1);
 
    } else {
-      *puMappedTagNumer = (uint16_t)uUnMappedTag;
+      *puMappedTagNumber = (uint16_t)uUnMappedTag;
    }
 
    return QCBOR_SUCCESS;
@@ -1601,7 +1606,7 @@ QCBORDecode_Private_UnMapTagNumber(const QCBORDecodeContext *pMe,
 
 
 /**
- * @brief Aggregate all tags wrapping a data item (decode layer 4).
+ * @brief Aggregate all tag numbers on a data item (decode layer 4).
  *
  * @param[in] pMe            Decoder context
  * @param[out] pDecodedItem  The decoded item that work is done on.
@@ -1629,35 +1634,37 @@ QCBORDecode_Private_UnMapTagNumber(const QCBORDecodeContext *pMe,
  *                                               strings are disabled.
  * @retval QCBOR_ERR_TOO_MANY_TAGS           Too many tag numbers on item.
  *
- * This loops getting atomic data items until one is not a tag
- * number.  Usually this is largely pass-through because most
- * item are not tag numbers.
+ * This loops getting atomic data items until one is not a tag number.
+ * Usually this is pass-through because tag numbers are not often
+ * used.
+ *
+ * On error, pDecodedItem->uTags has no valid data and should not be
+ * referenced.
  */
 static QCBORError
 QCBORDecode_Private_GetNextTagNumber(QCBORDecodeContext *pMe,
                                      QCBORItem          *pDecodedItem)
 {
 #ifndef QCBOR_DISABLE_TAGS
-   /* Accummulate the tags from multiple items here and then copy them
-    * into the last item, the non-tag item.
-    */
-   uint16_t auItemsTags[QCBOR_MAX_TAGS_PER_ITEM];
+   uint16_t    auItemsTags[QCBOR_MAX_TAGS_PER_ITEM];
+   QCBORError  uReturn;
+   QCBORError  uErr;
+   size_t      uIndex;
 
-   /* Initialize to CBOR_TAG_INVALID16 */
-   #if CBOR_TAG_INVALID16 != 0xffff
-   /* Be sure the memset does the right thing. */
-   #err CBOR_TAG_INVALID16 tag not defined as expected
-   #endif
-   memset(auItemsTags, 0xff, sizeof(auItemsTags));
+   /* Initialize tag number accumulator to CBOR_TAG_INVALID16 */
+   for(uIndex = 0; uIndex < QCBOR_MAX_TAGS_PER_ITEM; uIndex++) {
+      auItemsTags[uIndex] = CBOR_TAG_INVALID16;
+   }
 
-   QCBORError uReturn = QCBOR_SUCCESS;
-
-   /* Loop fetching data items until the item fetched is not a tag */
+   /* Loop fetching data items until the item fetched is not a tag.
+    * Decoded tags from multiple tag number items accumulate in
+    * auItemsTags and then are copied in to *pDecodedItem. */
+   uReturn = QCBOR_SUCCESS;
    for(;;) {
-      QCBORError uErr = QCBORDecode_Private_GetNextFullString(pMe, pDecodedItem);
+      uErr = QCBORDecode_Private_GetNextFullString(pMe, pDecodedItem);
       if(uErr != QCBOR_SUCCESS) {
          uReturn = uErr;
-         goto Done;
+         break;
       }
 
       if(pDecodedItem->uDataType != QCBOR_TYPE_TAG) {
@@ -1666,35 +1673,30 @@ QCBORDecode_Private_GetNextTagNumber(QCBORDecodeContext *pMe,
          break;
       }
 
+      if(uReturn != QCBOR_SUCCESS) {
+         /* The uReturn errors are because an implementation limit on
+          * the number of tag numbers was hit, not because of any
+          * problem with the input CBOR. This continues to decode
+          * after these errors. They are not in the range started by
+          * QCBOR_START_OF_UNRECOVERABLE_DECODE_ERRORS. Also, once in
+          * error state, stay there and don't try to record or map any
+          * more tag numbers. */
+         continue;
+      }
+
       if(auItemsTags[QCBOR_MAX_TAGS_PER_ITEM - 1] != CBOR_TAG_INVALID16) {
-         /* No room in the tag list */
+         /* No room in the item's tag list */
          uReturn = QCBOR_ERR_TOO_MANY_TAGS;
-         /* Continue on to get all tags wrapping this item even though
-          * it is erroring out in the end. This allows decoding to
-          * continue. This is a resource limit error, not a problem
-          * with being well-formed CBOR.
-          */
          continue;
       }
       /* Slide tags over one in the array to make room at index 0.
-       * Must use memmove because the move source and destination
-       * overlap.
-       */
-      memmove(&auItemsTags[1],
-              auItemsTags,
-              sizeof(auItemsTags) - sizeof(auItemsTags[0]));
+       * memmove() because the move source and destination overlap. */
+      memmove(&auItemsTags[1], auItemsTags, sizeof(auItemsTags) - sizeof(auItemsTags[0]));
 
-      /* Map the tag */
-      uint16_t uMappedTagNumber = 0;
-      uReturn = QCBORDecode_Private_MapTagNumber(pMe, pDecodedItem->val.uTagV, &uMappedTagNumber);
-      /* Continue even on error so as to consume all tags wrapping
-       * this data item so decoding can go on. If MapTagNumber()
-       * errors once it will continue to error.
-       */
-      auItemsTags[0] = uMappedTagNumber;
+      /* Map the tag; possible error for too many mapped tags */
+      uReturn = QCBORDecode_Private_MapTagNumber(pMe, pDecodedItem->val.uTagV, &auItemsTags[0]);
    }
 
-Done:
    return uReturn;
 
 #else /* QCBOR_DISABLE_TAGS */
@@ -3416,6 +3418,10 @@ QCBORDecode_Private_MapSearch(QCBORDecodeContext *pMe,
       /* See if item has one of the labels that are of interest */
       bMatched = false;
       for(int nIndex = 0; pItemArray[nIndex].uLabelType != QCBOR_TYPE_NONE; nIndex++) {
+         if(nIndex >= QCBOR_DECODE_MAX_GET_ITEMS) {
+            uReturn = QCBOR_ERR_TOO_MANY_GET_ITEMS;
+            goto Done;
+         }
          if(QCBORItem_MatchLabel(Item, pItemArray[nIndex])) {
             /* A label match has been found */
             if(uFoundItemBitMap & (0x01ULL << nIndex)) {
@@ -3495,7 +3501,7 @@ QCBORDecode_Private_MapSearch(QCBORDecodeContext *pMe,
 
  Done2:
    /* For all items not found, set the data and label type to QCBOR_TYPE_NONE */
-   for(int i = 0; pItemArray[i].uLabelType != 0; i++) {
+   for(int i = 0; i < QCBOR_DECODE_MAX_GET_ITEMS && pItemArray[i].uLabelType != 0; i++) {
       if(!(uFoundItemBitMap & (0x01ULL << i))) {
          pItemArray[i].uDataType  = QCBOR_TYPE_NONE;
          pItemArray[i].uLabelType = QCBOR_TYPE_NONE;
@@ -6279,12 +6285,12 @@ QCBOR_Private_ConvertDouble(const QCBORItem *pItem,
    switch(pItem->uDataType) {
       case QCBOR_TYPE_FLOAT:
 #ifndef QCBOR_DISABLE_PREFERRED_FLOAT
+         /* This case probably never occurs because QCBOR_TYPE_FLOAT only
+          * the type when all float conversion is off. */
          if(uConvertTypes & QCBOR_CONVERT_TYPE_FLOAT) {
-            if(uConvertTypes & QCBOR_CONVERT_TYPE_FLOAT) {
-               *pdValue = IEEE754_SingleToDouble( UsefulBufUtil_CopyFloatToUint32(pItem->val.fnum));
-            } else {
-               return QCBOR_ERR_UNEXPECTED_TYPE;
-            }
+            *pdValue = IEEE754_SingleToDouble( UsefulBufUtil_CopyFloatToUint32(pItem->val.fnum));
+         } else {
+            return QCBOR_ERR_UNEXPECTED_TYPE;
          }
 #else /* ! QCBOR_DISABLE_PREFERRED_FLOAT */
          return QCBOR_ERR_HALF_PRECISION_DISABLED;
@@ -6293,11 +6299,9 @@ QCBOR_Private_ConvertDouble(const QCBORItem *pItem,
 
       case QCBOR_TYPE_DOUBLE:
          if(uConvertTypes & QCBOR_CONVERT_TYPE_FLOAT) {
-            if(uConvertTypes & QCBOR_CONVERT_TYPE_FLOAT) {
-               *pdValue = pItem->val.dfnum;
-            } else {
-               return QCBOR_ERR_UNEXPECTED_TYPE;
-            }
+            *pdValue = pItem->val.dfnum;
+         } else {
+            return QCBOR_ERR_UNEXPECTED_TYPE;
          }
          break;
 
@@ -6674,29 +6678,42 @@ QCBORDecode_GetDoubleConvertAllInMapSZ(QCBORDecodeContext *pMe,
 
 #ifndef QCBOR_DISABLE_EXP_AND_MANTISSA
 /**
- * @brief Convert an integer to a big number
+ * @brief Convert an integer to a big number.
  *
- * @param[in] uInt  The integer to convert.
- * @param[in] Buffer  The buffer to output the big number to.
+ * @param[in] uInt    The unsigned integer to convert.
+ * @param[in] Buffer  The buffer to output the big number to; must be
+ *                    at least 8 bytes.
  *
- * @returns The big number or NULLUsefulBufC is the buffer is to small.
+ * @returns  The big number, or NULLUsefulBufC if the buffer is too small.
  *
- * This always succeeds unless the buffer is too small.
+ * The result is the shortest big-endian byte string that represents
+ * @c uInt, with no leading zero bytes. Zero is represented as a single
+ * 0x00 byte rather than an empty string.
  */
 static UsefulBufC
-QCBOR_Private_ConvertIntToBigNum(uint64_t uInt, const UsefulBuf Buffer)
+QCBOR_Private_ConvertUIntToBigNum(uint64_t uInt, const UsefulBuf Buffer)
 {
-   while((uInt & 0xff00000000000000ULL) == 0) {
-      uInt = uInt << 8;
-   };
-
    UsefulOutBuf UOB;
+   int          nShift;
 
    UsefulOutBuf_Init(&UOB, Buffer);
 
-   while(uInt) {
-      UsefulOutBuf_AppendByte(&UOB, (uint8_t)((uInt & 0xff00000000000000ULL) >> 56));
-      uInt = uInt << 8;
+   /* Find the most significant non-zero byte. nShift ends up < 0
+    * when uInt is zero. */
+   for(nShift = 56; nShift >= 0; nShift -= 8) {
+      if((uInt >> nShift) & 0xffULL) {
+         break;
+      }
+   }
+
+   if(nShift < 0) {
+      /* Zero is one 0x00 byte, not an empty string */
+      UsefulOutBuf_AppendByte(&UOB, 0x00);
+   } else {
+      /* All bytes from there down, trailing zero bytes included */
+      for(; nShift >= 0; nShift -= 8) {
+         UsefulOutBuf_AppendByte(&UOB, (uint8_t)((uInt >> nShift) & 0xffULL));
+      }
    }
 
    return UsefulOutBuf_OutUBuf(&UOB);
@@ -6877,7 +6894,7 @@ QCBOR_Private_ProcessExpMantissa(QCBORDecodeContext         *pMe,
  * @param[in] BufferForMantissa  Buffer to output mantissa into.
  * @param[out] pMantissa         The output mantissa.
  * @param[out] pbIsNegative      The sign of the output.
- * @param[out] pnExponent        The mantissa of the output.
+ * @param[out] pnExponent        The exponent of the output.
  *
  * This is the common processing of a decimal fraction or a big float
  * into a big number. This will decode and consume all the CBOR items
@@ -6920,13 +6937,19 @@ QCBORDecode_Private_ProcessExpMantissaBig(QCBORDecodeContext          *pMe,
                uMantissa = (uint64_t)INT64_MAX+1;
             }
             *pbIsNegative = true;
+            /* Reverse the offset by 1 for type 1 negative value to be
+             * consistent with big num case below which don't offset
+             * because it requires big number arithmetic. This is a
+             * bug fix for QCBOR v1.5.
+             *
+             * In v1.5 and v1.6 this decrement was outside this
+             * conditional and very incorrectly applied to positive
+             * values. Fixed in v1.7.
+             */
+            uMantissa--;
          }
-         /* Reverse the offset by 1 for type 1 negative value to be consistent
-          * with big num case below which don't offset because it requires
-          * big number arithmetic. This is a bug fix for QCBOR v1.5.
-          */
-         uMantissa--;
-         *pMantissa = QCBOR_Private_ConvertIntToBigNum(uMantissa, BufferForMantissa);
+
+         *pMantissa = QCBOR_Private_ConvertUIntToBigNum(uMantissa, BufferForMantissa);
          *pnExponent = pItem->val.expAndMantissa.nExponent;
          break;
 

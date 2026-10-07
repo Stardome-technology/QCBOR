@@ -56,24 +56,29 @@ extern "C" {
  *   - QCBOR 1.2 is indicated by the #define QCBOR_1_2
  *   - QCBOR 1.1 is indicated by the #define QCBOR_1_1
  *   - QCBOR 1.0 is indicated by the absence of all the above
+ *
+ * Also update version in CMakeLists.txt, qcbor.spec and CHANGELOG.md.
  */
 #define QCBOR_VERSION_MAJOR 1
-#define QCBOR_VERSION_MINOR 6
-#define QCBOR_VERSION_PATCH 1
+#define QCBOR_VERSION_MINOR 7
+#define QCBOR_VERSION_PATCH 0
 
-
-/**
- * Constuct version string
- *
- * Use C pre-processor magic to turn the above integers into
- * a version string like "libqcbor 1.6.0"
- */
+/* Pre-processor magic turns above integers into a standard version string. */
 #define STR1(x) #x
 #define STR(x) STR1(x)
-#define QCBOR_VERSION_STRING "libqcbor " STR(QCBOR_VERSION_MAJOR) "." \
-                                         STR(QCBOR_VERSION_MINOR) "." \
-                                         STR(QCBOR_VERSION_PATCH)
 
+/** Standard-format version string */
+#define QCBOR_VERSION_STRING  STR(QCBOR_VERSION_MAJOR) "." \
+                              STR(QCBOR_VERSION_MINOR) "." \
+                              STR(QCBOR_VERSION_PATCH)
+
+/* Banner embedded in object code for display by strings shell command */
+#define QCBOR_VERSION_BANNER "libqcbor " QCBOR_VERSION_STRING
+
+/** One number for simple scalar version comparison */
+#define QCBOR_VERSION_NUMBER  QCBOR_VERSION_MAJOR * 10000 +\
+                              QCBOR_VERSION_MINOR * 100 + \
+                              QCBOR_VERSION_PATCH)
 
 /**
  * This define indicates a version of QCBOR that supports spiffy
@@ -537,6 +542,11 @@ typedef enum {
     * indefinite-length strings because they exist in memory pool for
     * a @ref QCBORStringAllocate. */
    QCBOR_ERR_CANNOT_ENTER_ALLOCATED_STRING = 79,
+
+   /** QCBORDecode_GetItemsInMap() with more than
+     * @ref QCBOR_DECODE_MAX_GET_ITEMS */
+   QCBOR_ERR_TOO_MANY_GET_ITEMS = 80,
+
 
    /** A range of error codes that can be made use of by the
     * caller. QCBOR internally does nothing with these except notice
