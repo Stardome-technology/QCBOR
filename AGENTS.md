@@ -1,11 +1,10 @@
 <!-- git-workflow: v1 -->
 ## Git workflow
-- forge: gitlab                # github | gitlab
+- forge: github                # github | gitlab
 - status: fork-submodule       # production | development | fork-submodule
 - origin: this fork            # writable: push work branches here, open MRs/PRs here
-- upstream: <original-repo-url>  # documentation only — the repo this fork was cut from
-  # (e.g. https://github.com/nervosnetwork/merkle-tree.git). No clone carries an
-  # `upstream` git remote; agents never fetch or push it.
+- upstream: https://github.com/laurencelundblade/QCBOR.git  # documentation only — the repo this fork was cut from
+  # No clone carries an `upstream` git remote; agents never fetch or push it.
   # If no live upstream exists: "none (stripped snapshot)".
 - integration branch: stardome-stripped   # stardome-stripped | stardome-stripped-v2
   # protected — never push directly
